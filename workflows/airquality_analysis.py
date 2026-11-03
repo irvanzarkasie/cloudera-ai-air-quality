@@ -1,145 +1,122 @@
 import os
 from typing import List, Optional
 from crewai import LLM, Crew, Agent, Task
-from agent_tools.bounding_box_extractor_tool import BoundingBoxExtractorTool
 from agent_tools.air_quality_analysis_tool import AirQualityAnalysisTool
-from agent_tools.weather_tools import HistoricalWeatherTool # Assuming weather_tools.py contains HistoricalWeatherTool
-from agent_tools.utils import get_openai_api_key, get_serper_api_key # Import specific functions you use
-MODEL_NAME=os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
-# LLM Configuration
+from agent_tools.weather_tools import CurrentWeatherTool
+from agent_tools.input_parser_tool import InputParserTool
+
+MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
+
 llm = LLM(
-    model=MODEL_NAME,  # call model by provider/model_name
-    temperature=0.7,  # Slightly lower temperature for more focused analysis
-    max_tokens=1000,  # Increased max tokens for a more comprehensive report
+    model=MODEL_NAME,
+    temperature=0.7,
+    max_tokens=1000,
     top_p=0.9,
     frequency_penalty=0.1,
     presence_penalty=0.1,
     stop=["END"],
-    seed=42
+    seed=42,
 )
 
-
-# Load API Keys (ensure these are set as environment variables or securely managed)
 openai_api_key = os.environ.get("OPENAI_API_KEY")
-
 if not openai_api_key:
     raise ValueError("OPENAI_API_KEY environment variable not set.")
 
-# Initialize Tools
-bounding_box_extractor_tool = BoundingBoxExtractorTool()
+input_parser_tool = InputParserTool()
 air_quality_tool = AirQualityAnalysisTool()
-weather_tool = HistoricalWeatherTool()
+weather_tool = CurrentWeatherTool()
 
 
+def create_air_quality_analysis_crew(
+    locations: List[str],
+    aq_parameters: Optional[List[str]] = None,
+    user_input: Optional[str] = None,
+):
+    """Jakarta live snapshot crew (dates optional/ignored for compatibility)."""
+    locs = locations or ["Jakarta, Indonesia"]
+    params = aq_parameters or ["pm25", "ispu"]
+    query = user_input or (
+        f"Current air quality snapshot for {', '.join(locs)} focusing on {', '.join(params)}."
+    )
 
-def create_air_quality_analysis_crew(locations: List[str], start_date: str, end_date: str, aq_parameters: Optional[List[str]] = None):
-    """Creates and runs the air quality analysis crew."""
-
-    # Agent 1: Bounding Box Retriever
-    bounding_box_retriever = Agent(
-        role="Geospatial Data Specialist",
-        goal="Retrieve bounding box coordinates for the specified locations.",
-        backstory="Expert in geographical information retrieval and spatial data analysis.",
+    input_parser_agent = Agent(
+        role="Input Data Parser",
+        goal="Validate locations and parameters for live snapshot mode.",
+        backstory="Workshop parser for udara.jakarta.go.id.",
         verbose=True,
         allow_delegation=False,
-        tools=[bounding_box_extractor_tool],
+        tools=[input_parser_tool],
     )
 
-    # Task 1: Get Bounding Boxes
-    get_bounding_boxes_task = Task(
-        description=f"For each of the following locations: {locations}, use the 'bounding_box_extractor' tool to find their bounding box coordinates. Return the bounding boxes associated with each location.",
-        agent=bounding_box_retriever,
-        expected_output="A dictionary or list containing the bounding box coordinates (south, west, north, east) for each specified location.",
+    parse_task = Task(
+        description=f"Parse: {query}. Use InputParserTool; ignore dates.",
+        agent=input_parser_agent,
+        expected_output="Validated live_snapshot input.",
     )
 
-    # Agent 2: Weather Data Integrator
     weather_data_integrator = Agent(
-        role="Historical Weather Data Specialist",
-        goal="Retrieve concise historical weather summaries for the specified locations and dates.",
-        backstory="Expert in accessing and summarizing historical meteorological data relevant to environmental analysis.",
+        role="Current Weather Specialist",
+        goal="Current weather for snapshot context.",
+        backstory="Open-Meteo current conditions.",
         verbose=True,
         allow_delegation=False,
         tools=[weather_tool],
     )
 
-    # Task 2: Get Weather Data
     get_weather_data_task = Task(
-        description=f"For each of the following locations: {locations}, use the bounding boxes (south, west, north, east) to query the weather tool to find a concise summary of relevant historical weather conditions between {start_date} and {end_date}. Focus on key weather aspects that might influence air quality (e.g., temperature, wind, precipitation).",
+        description="Call CurrentWeatherTool for each location from context.",
         agent=weather_data_integrator,
-        expected_output="A dictionary or list containing concise summaries of historical weather conditions for each specified city.",
-        context=[get_bounding_boxes_task], 
+        expected_output="Current weather summary.",
+        context=[parse_task],
     )
 
-    # Agent 3: Air Quality Data Retriever
     air_quality_retriever = Agent(
         role="Air Quality Data Retriever",
-        goal="Fetch air quality data from OpenAQ for the specified locations and date range.",
-        backstory="Specialized in accessing and retrieving air quality data from the OpenAQ database.",
+        goal="Fetch live Jakarta SPKU data from udara.jakarta.go.id.",
+        backstory="DKI DLH snapshot specialist.",
         verbose=True,
         allow_delegation=False,
         tools=[air_quality_tool],
     )
-    
-    # Task 3: Get Air Quality Data
+
     get_air_quality_data_task = Task(
-        description=f"Fetch air quality data using the air_quality_tool for the following locations: {locations} from {start_date} to {end_date} using the bounding boxes for each location. If specific parameters are provided ({aq_parameters}), focus on those. Return the data as a pandas DataFrame.",
+        description=(
+            f"Call air_quality_tool for locations {locs} and parameters {params}; "
+            "bounding_boxes=[]; return current DataFrame."
+        ),
         agent=air_quality_retriever,
-        expected_output="A pandas DataFrame containing the air quality data for the specified locations, dates, and parameters.",
-        context=[get_bounding_boxes_task],  # The AirQualityAnalysisTool needs the locations
+        expected_output="Live air quality DataFrame.",
+        context=[parse_task],
     )
 
-    # Agent 4: Air Quality Analyst
     air_quality_analyst = Agent(
         role="Air Quality Analyst",
-        goal="Analyze the collected air quality data and the corresponding weather information to generate a comprehensive report on the air quality situation.",
-        backstory="Experienced environmental scientist specializing in air pollution analysis and its relationship with meteorological conditions.",
+        goal="Snapshot report — no historical trends.",
+        backstory="ISPU/PM interpretation across Jakarta stations.",
         verbose=True,
         allow_delegation=False,
-        llm=llm,  # Use the configured LLM
-        context=[get_air_quality_data_task] + [get_weather_data_task],
+        llm=llm,
     )
 
-    # Task 4: Analyze and Report
     analysis_task = Task(
-        description="Analyze the provided air quality data (including parameters like pm10, value, units, date, and location) for the specified locations and dates. Consider the historical weather information (temperature, wind, precipitation, humidity) for the same period. Identify any trends in air quality, calculate average values where relevant, and discuss any potential correlations or influences of weather conditions on the air quality. Provide a detailed report summarizing the air quality situation for each city, including the key findings and any notable observations related to weather patterns.",
+        description=(
+            "Snapshot report with observation time, station comparison, ISPU context, "
+            "current weather; source udara.jakarta.go.id."
+        ),
         agent=air_quality_analyst,
-        expected_output="A comprehensive report detailing the air quality analysis for each city, including trends, averages, and a discussion of potential relationships with the historical weather conditions.",
+        expected_output="Summary and conclusion for current conditions.",
+        context=[get_air_quality_data_task, get_weather_data_task],
     )
-
-
-    # Instantiate the Crew
-    agents = [bounding_box_retriever, weather_data_integrator, air_quality_retriever, air_quality_analyst]
-    tasks = [get_bounding_boxes_task, get_weather_data_task, get_air_quality_data_task, analysis_task]
-
 
     crew = Crew(
-        agents=agents,
-        tasks=tasks,
+        agents=[
+            input_parser_agent,
+            weather_data_integrator,
+            air_quality_retriever,
+            air_quality_analyst,
+        ],
+        tasks=[parse_task, get_weather_data_task, get_air_quality_data_task, analysis_task],
         verbose=True,
     )
 
-    # Run the crew and get the analysis report
-    report = crew.kickoff()
-    return report
-
-
-# For Testing just the workflow
-# if __name__ == "__main__":
-#     locations = ["New Delhi, India", "Chennai, India"]
-#     analysis_start_date = "2024-12-31"
-#     analysis_end_date = "2025-01-02"
-#     parameters_of_interest = ["pm25, pm10"]  # Optional
-
-#     try:
-#         analysis_report = create_air_quality_analysis_crew(
-#             locations=locations,
-#             start_date=analysis_start_date,
-#             end_date=analysis_end_date,
-#             aq_parameters=parameters_of_interest
-#         )
-#         print("\n--- Air Quality Analysis Report ---")
-#         print(analysis_report)
-#     except ValueError as e:
-#         print(f"Error: {e}")
-#     except Exception as e:
-#         print(f"An unexpected error occurred: {e}")
+    return crew.kickoff()

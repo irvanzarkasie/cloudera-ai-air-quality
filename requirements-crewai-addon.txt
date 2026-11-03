@@ -1,0 +1,4 @@
+# Install only when running the multi-agent crew (slow on first install).
+# Pre-install via wheelhouse or custom CAI runtime for workshops — see docs/cai-workshop-dependencies.md
+crewai==0.120.1
+pysqlite3-binary==0.5.4

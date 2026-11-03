@@ -1,219 +1,129 @@
 """
-air_quality_analysis_tool.py
+Live Jakarta air quality snapshot via udara.jakarta.go.id (+ optional Open-Meteo grid).
 
-Author: Vish Rajagopalan
-Company: Cloudera
-Date: 2025-05-21
-
-Description:
-This module defines the AirQualityAnalysisTool, which is designed to fetch
-and aggregate historical air quality data for specified locations and dates
-using a combination of OpenAQ API, AWS S3 OpenAQ data archive, and an
-internal BoundingBoxExtractorTool for geographical lookup.
+Workshop fork: no OpenAQ historical pipeline.
 """
 
-from typing import Optional, List, Type
-from datetime import datetime, date
-import requests
-import pandas as pd
-import gzip
-import os
+from __future__ import annotations
 
+from datetime import datetime
+from typing import List, Optional, Type
+
+import pandas as pd
 from crewai.tools import BaseTool
-import boto3
-from botocore import UNSIGNED
-from botocore.config import Config
-from .bounding_box_extractor_tool import BoundingBoxExtractorTool # Relative import if in same package
-# Import the get_openaq_api_key function from your utils file
-from .utils import get_openaq_api_key
-from typing import List, Optional
-anonymous_session = boto3.Session()  # For public bucket
+from pydantic import BaseModel, Field
+
+from .jakarta_air_sources import fetch_jakarta_realtime_dataframe, is_jakarta_location
+
+DEFAULT_LOCATION = "Jakarta, Indonesia"
+_AGENT_MAX_ROWS = 80
+
+
+def _ispu_extremes_block(df: pd.DataFrame, n: int = 5) -> str:
+    if "parameter" not in df.columns or "value" not in df.columns:
+        return ""
+    ispu = df.loc[df["parameter"].astype(str).str.lower() == "ispu"].copy()
+    if ispu.empty:
+        return ""
+    ispu = ispu.sort_values("value", ascending=False)
+    loc_col = "location" if "location" in ispu.columns else None
+    lines = ["ISPU extremes (official stations):"]
+    lines.append(f"  Highest {n}:")
+    for _, row in ispu.head(n).iterrows():
+        loc = row[loc_col] if loc_col else "?"
+        lines.append(f"    {row['value']:.1f} — {loc}")
+    lines.append(f"  Lowest {n}:")
+    for _, row in ispu.tail(n).iloc[::-1].iterrows():
+        loc = row[loc_col] if loc_col else "?"
+        lines.append(f"    {row['value']:.1f} — {loc}")
+    return "\n".join(lines) + "\n\n"
+
+
+def format_air_quality_for_agent(df: pd.DataFrame, max_rows: int = _AGENT_MAX_ROWS) -> str:
+    if df.empty:
+        return "No air quality data returned from udara.jakarta.go.id."
+    obs = df["date"].dropna().unique().tolist() if "date" in df.columns else []
+    extremes = _ispu_extremes_block(df)
+    head = df.head(max_rows)
+    body = head.to_string(index=False)
+    tail = len(df) - len(head)
+    extra = f"\n\n... ({tail} more rows omitted; total {len(df)} rows)" if tail > 0 else ""
+    return f"Observation date(s): {obs}\nRows: {len(df)}\n\n{extremes}{body}{extra}"
+
+
+class AirQualityAnalysisInput(BaseModel):
+    locations: List[str] = Field(
+        ...,
+        description="Locations to label results (Jakarta/DKI for this lab).",
+    )
+    aq_parameters: Optional[List[str]] = Field(
+        default=None,
+        description="Optional filter e.g. ['pm25', 'ispu'].",
+    )
+    bounding_boxes: Optional[List[List[float]]] = Field(
+        default=None,
+        description="Ignored for Jakarta snapshot; pass null or [].",
+    )
+    start_date: Optional[str] = Field(
+        default=None,
+        description="Ignored — snapshot is always current.",
+    )
+    end_date: Optional[str] = Field(
+        default=None,
+        description="Ignored — snapshot is always current.",
+    )
+
 
 class AirQualityAnalysisTool(BaseTool):
     name: str = "air_quality_analysis"
-    description: str = "Fetch air quality data for specified locations and dates, returning aggregated results."
-    parameters: Optional[List[dict]] = [
-        {
-            "name": "bounding_boxes",
-            "type": "list[list[float]]",
-            "description": (
-                "List of bounding boxes with each box as a List of coordinates each represented as a flat list of four float values  [West,  South, East, North] to analyze air quality. Example: [[-34.3, 150.0, -33.2, 151.5], [...]]"
-            ),
-            "required": True,
-        },      
-        {
-            "name": "locations",
-            "type": "list[str]",
-            "description": "List of location names to analyze air quality for.",
-            "required": True,
-        },          
-        {
-            "name": "start_date",
-            "type": "str",
-            "description": "Start date for the analysis in YYYY-MM-DD format.",
-            "required": True,
-        },
-        {
-            "name": "end_date",
-            "type": "str",
-            "description": "End date for the analysis in YYYY-MM-DD format.",
-            "required": True,
-        },
-        {
-            "name": "aq_parameters",
-            "type": "Optional[list[str]]",
-            "description": "Optional list of air quality parameters to filter (e.g., ['pm25', 'o3']). If None, all available parameters are used.",
-            "required": False,
-        },
-    ]
-    def _run(self, bounding_boxes: List[List[float]], locations: List[str], start_date: str, end_date: str, aq_parameters: Optional[List[str]] = None) -> pd.DataFrame:
-        """
-        Args:
-            bounding_boxes (list): List of bounding boxes each box is a list of coordinates [West,  South, East, North].
-            locations (list): List of location names corresponding to bounding boxes.            
-            start_date (str): Start date for the analysis in YYYY-MM-DD format.
-            end_date (str): End date for the analysis in YYYY-MM-DD format.
-            aq_parameters (list, optional): List of air quality parameters to filter. Defaults to None.
+    description: str = (
+        "Fetch the current official Jakarta air quality snapshot from udara.jakarta.go.id "
+        "(DKI DLH SPKU/LCS stations). Returns PM/ISPU readings at the latest observation time. "
+        "Date range and bounding boxes are accepted for workflow compatibility but are not used."
+    )
+    args_schema: Type[BaseModel] = AirQualityAnalysisInput
 
-        Returns:
-            pd.DataFrame: Aggregated air quality data with columns [date, parameter, unit, value, location_name].
-        """
-        
+    def _run(
+        self,
+        locations: List[str],
+        aq_parameters: Optional[List[str]] = None,
+        bounding_boxes: Optional[List[List[float]]] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> str:
+        locs = locations or [DEFAULT_LOCATION]
+        if not any(is_jakarta_location(loc) for loc in locs):
+            locs = [DEFAULT_LOCATION]
 
-        # Convert start_date and end_date strings to datetime objects
-        try:
-            start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-            end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise ValueError("Invalid date format. Please use YYYY-MM-DD.")
-
-        # Step 2: Fetch location IDs from OpenAQ
-        def get_location_ids(bbox: List[str]) -> List[dict]:
-            URL = "https://api.openaq.org/v3/locations?limit=100&page=1&order_by=id&sort_order=asc"
-            params = {
-                "bbox": f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}",
-            }
-            headers = {"X-API-Key": get_openaq_api_key()}
-            print( f"DEBUG : \n params : {params}, \n headers : {headers}")
-            response = requests.get(URL, headers=headers, params=params)
-            response.raise_for_status()
-            print("Debug : Response Location Details : ", response.json())
-            return response.json().get("results", [])
-
-        # Step 3: Fetch data from OpenAQ AWS bucket using boto3
-        def fetch_sensor_data(location_ids: List[int], start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame: # Updated type hints
-            consolidated_df = pd.DataFrame()
-            failed_locations = []  # To track locations that fail to return data
-
-            s3_client = anonymous_session.client('s3', region_name="us-east-1", config=Config(signature_version=UNSIGNED))
-            source_bucket_name = "openaq-data-archive"
-
-            for location_id in location_ids:
-                for date in pd.date_range(start=start_date, end=end_date):
-                    year, month, day = date.strftime("%Y"), date.strftime("%m"), date.strftime("%d")
-                    prefix = f"records/csv.gz/locationid={location_id}/year={year}/month={month}/"
-                    try:
-                        response = s3_client.list_objects_v2(Bucket=source_bucket_name, Prefix=prefix)
-                        if 'Contents' in response:
-                            for obj in response['Contents']:
-                                key = obj['Key']
-                                if key.endswith(f"{year}{month}{day}.csv.gz"):
-                                    print(f"Downloading: {key}")
-                                    obj_data = s3_client.get_object(Bucket=source_bucket_name, Key=key)
-                                    with gzip.GzipFile(fileobj=obj_data['Body']) as gz_file:
-                                        daily_df = pd.read_csv(gz_file)
-                                        consolidated_df = pd.concat([consolidated_df, daily_df], ignore_index=True)
-                        else:
-                            failed_locations.append(location_id)
-
-                    except Exception as e:
-                        print(f"Error fetching data for location ID {location_id}: {e}")
-                        failed_locations.append(location_id)
-            print("Sample Sensor Data from OPENAQ : \n", consolidated_df.head())
-            if failed_locations:
-                print(f"Locations with no data or errors: {failed_locations}")
-
-            return consolidated_df
-
-        # Step 4: Aggregate data
-        def aggregate_data(df: pd.DataFrame, parameters: Optional[List[str]] = None) -> pd.DataFrame:
-            df['datetime'] = pd.to_datetime(df['datetime'])  # Ensure datetime is parsed correctly
-            df = df.set_index('datetime')  # Set 'datetime' as the index
-
-            if parameters:
-                df = df[df['parameter'].isin(parameters)]  
-            try : 
-                # Reset the index to avoid conflicts with 'parameter'
-                df = df.reset_index()     
-                print("DF :\n ", df.head())           
-                daily_data = (
-                    df.groupby(['parameter', pd.Grouper(key='datetime', freq='D')])
-                    .agg(
-                        value=('value', 'mean'),
-                        units=('units', 'first')
-                    )
-                    .dropna()
-                    .reset_index()
-                )  
-            except Exception as e : 
-                print("Aggregation failed with Exception: ", e)
-            daily_data['date'] = daily_data['datetime'].dt.date
-            del daily_data['datetime']
-            return daily_data
-
-        # Main Workflow
-        all_data = []
-        for bbox, location in zip(bounding_boxes, locations):
-            try:
-                bbox_openaq_format  = [bbox[1], bbox[0], bbox[3], bbox[2]]  
-                print("FORMAT OF BBOX FOR OPENAQ: ", bbox_openaq_format)       
-                location_data = get_location_ids(bbox_openaq_format)
-                location_ids = [loc['id'] for loc in location_data]
-                # Open AQ accepts bounding box in the format west, south, east, north
-
-                print(f"Found {len(location_ids)} locations for bounding box (per openAQ format) {bbox_openaq_format} (Location: {location}). Downloading data...")
-
-                consolidated_df = fetch_sensor_data(location_ids, start_date_dt, end_date_dt)
-                if not consolidated_df.empty:               
-                    aggregated_daily_data = aggregate_data(consolidated_df, aq_parameters)
-                    aggregated_daily_data["location"] = location  # Add the location column
-                    all_data.append(aggregated_daily_data)
-
-            except Exception as e:
-                print(f"Error processing bounding box {bbox} for location {location}: {e}")
-
-        # Combine all data
-        if all_data:
-            result = pd.concat(all_data, ignore_index=True)
-            return result
-        else:
-            return pd.DataFrame(columns=["date", "parameter", "unit", "value", "location"])
-        
-
-tool = BoundingBoxExtractorTool()
-
-if __name__ == '__main__':
-    # Example usage:
-    analysis_tool = AirQualityAnalysisTool()
-    locations_to_analyze = [ "Sydney", "Singapore"]
-    parameters_to_analyze=["pm25"]
-    bboxes=[]
-    for location in locations_to_analyze : 
-        bbox = tool.run(location=location)
-        print(  "Bounding box : ", bbox)
-        bboxes.append(bbox)
+        print(
+            "[AirQualityAnalysisTool] Fetching live Jakarta SPKU snapshot from udara.jakarta.go.id "
+            f"(requested locations={locations!r}; dates ignored)."
+        )
+        live_df = fetch_jakarta_realtime_dataframe(
+            locs, aq_parameters, include_open_meteo=True
+        )
+        core = ["date", "parameter", "value", "units", "location"]
+        if live_df.empty:
+            return format_air_quality_for_agent(pd.DataFrame(columns=core))
+        trimmed = live_df[[c for c in core if c in live_df.columns]]
+        return format_air_quality_for_agent(trimmed)
 
 
-    start = "2025-01-01"
-    end = "2025-01-03"
-    parameters_to_analyze = ["pm25"]
+if __name__ == "__main__":
+    import re
+    import sys
+    from pathlib import Path
 
-    try:
-        
-        results_df = analysis_tool.run(bounding_boxes = bboxes,locations=locations_to_analyze, start_date=start, end_date=end, aq_parameters=parameters_to_analyze)
-
-        print("\nAggregated Air Quality Data:")
-        print(results_df)
-    except Exception as e:
-        print(f"An error occurred during analysis: {e}")
-
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    tool = AirQualityAnalysisTool()
+    today = datetime.now().strftime("%Y-%m-%d")
+    out = tool.run(
+        bounding_boxes=[],
+        locations=[DEFAULT_LOCATION],
+        start_date=today,
+        end_date=today,
+        aq_parameters=["pm25", "ispu"],
+    )
+    print(out[:2000])
+    m = re.search(r"Rows:\s*(\d+)", out)
+    assert m and int(m.group(1)) > 0, "expected live Jakarta rows"

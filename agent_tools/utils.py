@@ -12,6 +12,41 @@ def get_openai_api_key():
     openai_api_key = os.getenv("OPENAI_API_KEY")
     return openai_api_key
 
+
+_PLACEHOLDER_OPENAI_KEYS = frozenset(
+    {
+        "",
+        "open-ai-key",
+        "your-openai-api-key",
+        "your-openai-api-key-here",
+        "sk-your-key-here",
+        "changeme",
+    }
+)
+
+
+def ensure_openai_api_key() -> str:
+    """Load .env and fail fast with a clear message if the key is missing or a lab placeholder."""
+    load_env()
+    key = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
+    if not key:
+        raise ValueError(
+            "OPENAI_API_KEY is not set. Export OPENAI_API_KEY='sk-...' or set it in AirAware/.env "
+            "(see .env.example). To test data fetch without an LLM: python main_v1.py --dry-run"
+        )
+    if key.lower() in _PLACEHOLDER_OPENAI_KEYS or key.startswith("open-ai"):
+        raise ValueError(
+            "OPENAI_API_KEY is still the lab placeholder (e.g. open-ai-key). "
+            "Replace it with a real key from https://platform.openai.com/account/api-keys "
+            "or run: python main_v1.py --dry-run"
+        )
+    if not key.startswith("sk-"):
+        raise ValueError(
+            "OPENAI_API_KEY does not look valid (expected to start with sk-). "
+            "Use: python main_v1.py --dry-run to skip the LLM."
+        )
+    return key
+
 def get_serper_api_key():
     load_env()
     openai_api_key = os.getenv("SERPER_API_KEY")

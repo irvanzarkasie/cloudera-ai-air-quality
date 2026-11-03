@@ -3,21 +3,29 @@
 __pycache__
 */__pycache__/
 
+# Secrets / local env (keep .env.example templates)
+.env
+.env.*
+!.env.example
+!**/.env.example
+
 # Virtual environment
 .venv/
+.venv312/
 env/
 venv/
-llm-env/ # Based on your previous command prompt (llm-env)
+llm-env/
 
 # Editor/IDE specific files
-.idea/      # IntelliJ / PyCharm
+.idea/
 *.sublime-project
 *.sublime-workspace
-.vscode/    # VS Code
+.vscode/
 
 # Operating System files
-.DS_Store   # macOS
-Thumbs.db   # Windows
+.DS_Store
+**/.DS_Store
+Thumbs.db
 
 # Jupyter / IPython Notebook
 .ipynb_checkpoints
@@ -27,7 +35,25 @@ dist/
 build/
 *.egg-info/
 
+# Offline pip bundles (large; host on project storage)
+wheelhouse/
+wheelhouse-*.tar.gz
+
 # Logs and temporary files
 *.log
 *.tmp
 *.bak
+
+# Local agent / notebook outputs (regenerate with main_v1.py -o or crew runs)
+report.md
+jakarta_*.html
+*.map.html
+
+# DuckDB / local analysis scratch
+*.duckdb
+*.duckdb.wal
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/

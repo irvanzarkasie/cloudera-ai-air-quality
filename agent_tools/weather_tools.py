@@ -98,7 +98,77 @@ class HistoricalWeatherTool(BaseTool):
             return f"Error fetching weather data from Open-Meteo for bounding box {bounding_box}: {e}"
         except Exception as e:
             return f"An unexpected error occurred: {e}"
-        
+
+
+class CurrentWeatherInput(BaseModel):
+    """Input for current conditions at a named place (Jakarta lab default)."""
+
+    location: str = Field(
+        default="Jakarta, Indonesia",
+        description="Place name; Jakarta/DKI uses the official DKI center coordinates.",
+    )
+
+
+class CurrentWeatherTool(BaseTool):
+    name: str = "CurrentWeatherTool"
+    description: str = (
+        "Retrieves CURRENT weather (temperature, wind, humidity, precipitation) "
+        "from Open-Meteo forecast API for a location. No API key required. "
+        "Use for live air-quality snapshot context, not historical date ranges."
+    )
+    args_schema: Type[BaseModel] = CurrentWeatherInput
+
+    def _run(self, location: str = "Jakarta, Indonesia") -> str:
+        from .jakarta_air_sources import JAKARTA_LAT, JAKARTA_LON
+
+        lat, lon = JAKARTA_LAT, JAKARTA_LON
+        if location and "jakarta" not in location.lower() and "dki" not in location.lower():
+            try:
+                from .bounding_box_extractor_tool import BoundingBoxExtractorTool
+
+                bbox = BoundingBoxExtractorTool().run(location=location)
+                if isinstance(bbox, list) and len(bbox) == 4:
+                    south, west, north, east = bbox
+                    lat = (south + north) / 2
+                    lon = (west + east) / 2
+            except Exception:
+                pass
+
+        base_url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "current": (
+                "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_direction_10m"
+            ),
+            "timezone": "Asia/Jakarta",
+        }
+        try:
+            response = requests.get(base_url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            current = data.get("current") or {}
+            summary = {
+                "location": location,
+                "latitude": lat,
+                "longitude": lon,
+                "observation_time": current.get("time"),
+                "temperature_2m_c": current.get("temperature_2m"),
+                "relative_humidity_2m_pct": current.get("relative_humidity_2m"),
+                "precipitation_mm": current.get("precipitation"),
+                "wind_speed_10m_kmh": current.get("wind_speed_10m"),
+                "wind_direction_10m_deg": current.get("wind_direction_10m"),
+            }
+            return str(summary)
+        except requests.exceptions.RequestException as e:
+            return f"Error fetching current weather for {location}: {e}"
+        except Exception as e:
+            return f"An unexpected error occurred: {e}"
+
+
+if __name__ == "__main__":
+    print(CurrentWeatherTool().run(location="Jakarta, Indonesia"))
+
 # Only for Testing
 # from bounding_box_extractor_tool import BoundingBoxExtractorTool
 # def main(location: str, start_date: str, end_date: str):

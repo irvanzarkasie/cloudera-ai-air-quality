@@ -1,0 +1,18 @@
+# Optional: custom Cloudera AI / CML runtime with deps pre-baked.
+# Replace BASE with your site's Python 3.11 ML runtime image name.
+#
+# Build (organizer, once):
+#   docker build -f docker/Dockerfile.workshop-runtime -t jakarta-airaware-lab:2026 .
+# Register that image as a project or workspace "Runtime" / "Engine" in CAI admin UI.
+#
+# Attendees: select runtime "jakarta-airaware-lab" → notebook skips pip install.
+
+ARG BASE=python:3.11-slim
+FROM ${BASE}
+
+WORKDIR /opt/airaware
+COPY requirements-minimal.txt requirements-crewai-addon.txt ./
+RUN pip install --no-cache-dir -r requirements-minimal.txt -r requirements-crewai-addon.txt \
+    && python -c "import crewai, pandas, requests; print('workshop runtime ok')"
+
+ENV PYTHONUNBUFFERED=1

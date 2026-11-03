@@ -1,0 +1,6 @@
+# Fast install (~seconds): Udara fetch, weather, dry-run — no CrewAI / no chromadb.
+pandas==2.2.3
+requests==2.32.3
+python-dotenv==1.1.0
+pydantic==2.11.3
+folium==0.19.6

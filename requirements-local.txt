@@ -1,0 +1,3 @@
+# macOS local dev — no pysqlite3-binary (no arm64 wheel).
+-r requirements-minimal.txt
+crewai==0.120.1

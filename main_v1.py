@@ -1,19 +1,58 @@
 import os
+import sys
+
 from crewai import LLM, Crew, Agent, Task
-from agent_tools.bounding_box_extractor_tool import BoundingBoxExtractorTool
 from agent_tools.air_quality_analysis_tool import AirQualityAnalysisTool
-from agent_tools.weather_tools import HistoricalWeatherTool
-from agent_tools.input_parser_tool import InputParserTool 
+from agent_tools.crew_report import crew_result_text
+from agent_tools.input_parser_tool import InputParserTool
+from agent_tools.utils import ensure_openai_api_key
+from agent_tools.weather_tools import CurrentWeatherTool
 
 MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
+DEFAULT_LOCATION = "Jakarta, Indonesia"
+
+
+def _guess_aq_parameters(user_input: str) -> list[str]:
+    q = user_input.lower()
+    found: list[str] = []
+    for needle, param in (
+        ("pm2.5", "pm25"),
+        ("pm25", "pm25"),
+        ("pm10", "pm10"),
+        ("ispu", "ispu"),
+        ("no2", "no2"),
+        ("o3", "o3"),
+    ):
+        if needle in q:
+            found.append(param)
+    return list(dict.fromkeys(found)) or ["pm25", "ispu"]
+
+
+def run_dry_snapshot(user_input: str) -> str:
+    """Fetch Udara + weather without CrewAI (no OPENAI_API_KEY required)."""
+    params = _guess_aq_parameters(user_input)
+    locs = [DEFAULT_LOCATION]
+    validated = InputParserTool()._run(locs, params)
+    weather = CurrentWeatherTool()._run(DEFAULT_LOCATION)
+    air = AirQualityAnalysisTool()._run(
+        locations=locs, aq_parameters=params, bounding_boxes=[]
+    )
+    return (
+        "--- Dry run (tools only, no LLM) ---\n\n"
+        f"{validated}\n\n"
+        f"Current weather:\n{weather}\n\n"
+        f"Air quality snapshot:\n{air}\n"
+    )
 
 
 class AirQualityAnalysisCrew:
-    """Class-based implementation of the air quality analysis workflow."""
+    """Jakarta live snapshot crew (udara.jakarta.go.id + current weather)."""
 
-    def __init__(self, user_input: str):
+    def __init__(self, user_input: str, *, verbose: bool = True):
+        ensure_openai_api_key()
         self.user_input = user_input
-        self.llm = self._configure_llm()
+        self.verbose = verbose
+        self.analyst_llm = self._configure_analyst_llm()
         self.tools = self._initialize_tools()
         self.agents = {}
         self.tasks = {}
@@ -24,165 +63,212 @@ class AirQualityAnalysisCrew:
         self._initialize_crew()
 
     @staticmethod
-    def _configure_llm() -> LLM:
-        """Configure and return the LLM."""
+    def _configure_analyst_llm() -> LLM:
+        max_tokens = int(os.getenv("AIRAWARE_MAX_TOKENS", "8192"))
         return LLM(
             model=MODEL_NAME,
-            temperature=0.7,
-            max_tokens=1000,
+            temperature=0.5,
+            max_tokens=max_tokens,
             top_p=0.9,
-            frequency_penalty=0.1,
-            presence_penalty=0.1,
-            stop=["END"],
+            frequency_penalty=0.0,
+            presence_penalty=0.0,
             seed=42,
         )
 
     @staticmethod
     def _initialize_tools():
-        """Initialize and return tools."""
         return {
             "input_parser_tool": InputParserTool(),
-            "bounding_box_extractor_tool": BoundingBoxExtractorTool(),
             "air_quality_tool": AirQualityAnalysisTool(),
-            "weather_tool": HistoricalWeatherTool(),
+            "weather_tool": CurrentWeatherTool(),
         }
 
-# Note LAB WORK Begins here: Enter the details from the Lab Guide
     def _setup_agents(self):
-        """Set up all agents."""
-        # Step 1: Define agents individually
         input_parser_agent = Agent(
-            role="", #Lab Work : Enter Details here from LAB Guide
-            goal="", #Lab Work : Enter Details here from LAB Guide
-            backstory="", #Lab Work : Enter Details here
-            verbose=True,
+            role="Input Data Parser",
+            goal="Extract locations and air quality parameters for a live snapshot report.",
+            backstory=(
+                "Parses natural language into structured fields for Jakarta live air quality. "
+                "Ignores historical date ranges if the user mentions them."
+            ),
+            verbose=self.verbose,
             allow_delegation=False,
-            tools=[self.tools[""]], #Lab Work : Enter Details here
-        )
-        bounding_box_retriever = Agent(
-            role="", #Lab Work : Enter Details here from LAB Guide
-            goal="", #Lab Work : Enter Details here from LAB Guide
-            backstory="", #Lab Work : Enter Details here from LAB Guide
-            verbose=True,
-            allow_delegation=False,
-            tools=[self.tools[""]], #Lab Work : Enter Details here from LAB Guide
+            tools=[self.tools["input_parser_tool"]],
         )
         weather_data_integrator = Agent(
-            role="Historical Weather Data Specialist",
-            goal="Retrieve concise historical weather summaries for the specified locations and dates.",
-            backstory="Expert in historical meteorological data analysis.",
-            verbose=True,
+            role="Current Weather Specialist",
+            goal="Retrieve current weather for the same locations as the air quality snapshot.",
+            backstory="Summarizes present meteorological conditions that may affect pollution dispersion.",
+            verbose=self.verbose,
             allow_delegation=False,
             tools=[self.tools["weather_tool"]],
         )
         air_quality_retriever = Agent(
             role="Air Quality Data Retriever",
-            goal="Fetch air quality data from OpenAQ for the specified locations and date range.",
-            backstory="Specialized in accessing and retrieving air quality data.",
-            verbose=True,
+            goal=(
+                "Fetch the latest official Jakarta SPKU/LCS readings from udara.jakarta.go.id "
+                "using air_quality_analysis."
+            ),
+            backstory="Specialized in live DKI DLH air quality snapshots.",
+            verbose=self.verbose,
             allow_delegation=False,
-            tools=[
-                self.tools["bounding_box_extractor_tool"],
-                self.tools["air_quality_tool"]
-    ],
+            tools=[self.tools["air_quality_tool"]],
         )
         air_quality_analyst = Agent(
             role="Air Quality Analyst",
-            goal="Analyze air quality data and historical weather data to generate a report.",
-            backstory="Experienced in air quality analysis and meteorological research.",
-            verbose=True,
+            goal=(
+                "Produce a concise snapshot report from live station readings and current weather — "
+                "no historical trend analysis."
+            ),
+            backstory="Experienced in interpreting ISPU/PM levels across Jakarta monitoring stations.",
+            verbose=self.verbose,
             allow_delegation=False,
-            llm=self.llm,
+            llm=self.analyst_llm,
         )
 
-        # Step 2: Add agents to self.agents
         self.agents = {
             "input_parser_agent": input_parser_agent,
-            "bounding_box_retriever": bounding_box_retriever,
             "weather_data_integrator": weather_data_integrator,
             "air_quality_retriever": air_quality_retriever,
             "air_quality_analyst": air_quality_analyst,
         }
 
     def _setup_tasks(self):
-        """Set up all tasks."""
-        # Step 1: Define tasks individually
         parse_user_input_task = Task(
-            description=f"", #Lab Work : Enter Details here from LAB Guide,
-            agent=self.agents[""], #Lab Work : Enter Details here from LAB Guide,
+            description=(
+                f"Parse the user input: {self.user_input}. Use InputParserTool to extract "
+                "locations and aq_parameters only. Do not require or validate start/end dates."
+            ),
+            agent=self.agents["input_parser_agent"],
             expected_output=(
-                "" #Lab Work : Enter Details here from LAB Guide,
+                "Validated locations, aq_parameters, mode=live_snapshot, data_source=udara.jakarta.go.id."
             ),
         )
-        get_bounding_boxes_task = Task(
-            description="",#Lab Work : Enter Details here from LAB Guide,
-            agent=self.agents[""], #Lab Work : Enter Details here from LAB Guide,
-            expected_output="", #Lab Work : Enter Details here from LAB Guide,
+        get_weather_data_task = Task(
+            description=(
+                "From parsed locations in context, call CurrentWeatherTool for each location "
+                "(or once for Jakarta). Summarize current temperature, humidity, wind, and precipitation."
+            ),
+            agent=self.agents["weather_data_integrator"],
+            expected_output="Current weather summary per location with observation time.",
             context=[parse_user_input_task],
         )
-        get_weather_data_task = Task(
-            description="For each of the following locations, use the bounding boxes (south, west, north, east), and the start_date and end_date in the context,  to query the weather tool to find a concise summary of relevant historical weather conditions between provided  start_date and end_date. Focus on key weather aspects that might influence air quality (e.g., temperature, wind, precipitation).",
-            agent=self.agents["weather_data_integrator"],
-            expected_output="A dictionary or list containing aggregate of historical weather conditions for each specified location.",
-            context=[parse_user_input_task, get_bounding_boxes_task],
-        )
         get_air_quality_data_task = Task(
-            description="Fetch air quality data using the air_quality_tool for the eacj location: from start_date to end_date ONLY using the bounding boxes for each location. If specific parameters are provided by the aq_parameters attribute, focus on those. Return the data as a pandas DataFrame.",
+            description=(
+                "Call air_quality_tool with locations and aq_parameters from context. "
+                "Pass bounding_boxes=[]; dates are optional and ignored. "
+                "Return the live snapshot text from udara.jakarta.go.id (includes ISPU extremes summary)."
+            ),
             agent=self.agents["air_quality_retriever"],
-            expected_output="A pandas DataFrame containing the air quality data for the specified locations, dates, and parameters.",
-            context=[parse_user_input_task, get_bounding_boxes_task],
+            expected_output=(
+                "Air quality snapshot text with observation date, ISPU extremes, and sample rows."
+            ),
+            context=[parse_user_input_task],
         )
         analysis_task = Task(
-            description="Analyze the provided air quality data (including parameters like pm10, value, units, date, and location) for the specified locations and dates. Consider the historical weather information (temperature, wind, precipitation, humidity) for the same period. Identify any trends in air quality, calculate average values where relevant, and discuss any potential correlations or influences of weather conditions on the air quality. Provide a detailed report summarizing the air quality situation for each location, including the key findings and any notable observations related to weather patterns. Include facts and observations to compare the provided locations, as well as your own reliable knowledge base sources to comment on the overall Airquality",
+            description=(
+                f"User request: {self.user_input}\n\n"
+                "Write a live snapshot report (not historical trends). Use the ISPU extremes block "
+                "and weather context from prior tasks. Highlight the worst and best ISPU stations "
+                "with station names and values. Do not enumerate every station — at most 5 highest "
+                "and 5 lowest ISPU unless the user asked for a full table. "
+                "State observation time, brief ISPU category explanation, weather/dispersion note, "
+                "Summary and Conclusion. Source: udara.jakarta.go.id. Plain markdown, complete sentences."
+            ),
             agent=self.agents["air_quality_analyst"],
-            expected_output="A comprehensive report detailing the air quality analysis for each location, including trends, averages, and a discussion of potential relationships with the historical weather conditions. Include a Summary at the top and Conclusion at the end",
+            expected_output=(
+                "Complete markdown report (not truncated mid-sentence) with worst/best ISPU stations."
+            ),
             context=[get_air_quality_data_task, get_weather_data_task],
         )
 
-        # Step 2: Add tasks to self.tasks
         self.tasks = {
             "parse_user_input_task": parse_user_input_task,
-            "get_bounding_boxes_task": get_bounding_boxes_task,
             "get_weather_data_task": get_weather_data_task,
             "get_air_quality_data_task": get_air_quality_data_task,
             "analysis_task": analysis_task,
-        
-    }
+        }
 
     def _initialize_crew(self):
-        """Initialize the Crew with agents and tasks."""
         self.crew = Crew(
             agents=list(self.agents.values()),
             tasks=list(self.tasks.values()),
-            verbose=True,
+            verbose=self.verbose,
         )
 
     def execute(self):
-        """Execute the Crew workflow and return the report."""
         return self.crew.kickoff()
 
 
-# For Testing
+def _write_report(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+        if not text.endswith("\n"):
+            f.write("\n")
+
+
 import argparse
 
-# For Testing
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run air quality analysis based on user input.")
+    parser = argparse.ArgumentParser(description="Jakarta live air quality snapshot (CrewAI).")
     parser.add_argument(
         "--user-input",
-        help="A natural language query for air quality analysis, e.g., 'Analyze air quality for New Delhi and Chennai between January 1 and January 3 2025, focusing on PM25 and PM10.'",
+        help="Natural language query, e.g. current Jakarta pm25 and ispu from official SPKU data.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run Udara + weather tools only (no OpenAI / CrewAI).",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Less CrewAI console UI (recommended on CDSW/SSH).",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        metavar="FILE",
+        help="Write the full report to this file (recommended on CAI/CDSW).",
     )
     args = parser.parse_args()
 
-    # Default value if no input is provided
-    user_query = args.user_input or "Analyze air quality for New Delhi and Chennai between January 1 and January 3 2025, focusing on PM25 and PM10."
+    user_query = args.user_input or (
+        "Report current air quality for Jakarta, Indonesia from official SPKU data. "
+        "Focus on pm25 and ispu."
+    )
 
     try:
-        analysis_crew = AirQualityAnalysisCrew(user_input=user_query)
-        report = analysis_crew.execute()
-        print("\n--- Air Quality Analysis Report ---")
-        print(report)
+        if args.dry_run:
+            print(run_dry_snapshot(user_query))
+            raise SystemExit(0)
+
+        verbose = not args.quiet and os.getenv("AIRAWARE_QUIET", "").lower() not in (
+            "1",
+            "true",
+            "yes",
+        )
+        analysis_crew = AirQualityAnalysisCrew(user_input=user_query, verbose=verbose)
+        result = analysis_crew.execute()
+        report = crew_result_text(result)
+
+        out_path = args.output or os.getenv("AIRAWARE_REPORT_PATH")
+        if out_path:
+            _write_report(out_path, report)
+            print(f"Full report written to {out_path} ({len(report)} characters)", file=sys.stderr)
+
+        print("\n--- Air Quality Snapshot Report ---\n")
+        sys.stdout.write(report)
+        if not report.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
     except ValueError as e:
-        print(f"Error: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
+    except KeyError as e:
+        print(f"Configuration error (missing key {e!r}).")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        import traceback
+
+        print(f"An unexpected error occurred: {e!r}")
+        traceback.print_exc()
