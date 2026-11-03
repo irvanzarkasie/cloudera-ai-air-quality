@@ -1,114 +1,174 @@
-# AirAware Project
+# Cloudera AI — Jakarta Air Quality Workshop (AirAware)
 
-## Overview
-This project focuses on leveraging Generative AI to address environmental challenges through a multi-agent workflow. Specifically, the application analyzes air quality and integrates it with meteorological data for a comprehensive understanding of environmental trends. The workflow emphasizes the use of open datasets and APIs to create actionable insights as part of the broader **"Data for Good"** initiative.
+Hands-on lab for building **multi-agent air quality workflows** on **Cloudera AI Workbench**, using **live Jakarta SPKU data** from [udara.jakarta.go.id](https://udara.jakarta.go.id) and **CrewAI** in Python, then recreating the same pattern in **Agent Studio**.
 
-### Highlights:
-1. **Open Data Sources**:
-   - **Air Quality Data**: Utilizes the OpenAQ API for accessing air quality metrics.
-   - **Geocoding**: Employs OpenStreetMap to extract bounding box coordinates for specified locations.
-   - **Weather Data**: Integrates with Open-Meteo API to fetch weather details.
+The lab uses a **live snapshot** model: current station ISPU and pollutants from DKI’s public portal, plus **current weather** from Open-Meteo. User prompts that mention date ranges are ignored for air quality; reports should cite the **observation time** returned by the Udara data.
 
-2. **Agentic Workflow**:
-   - Combines multiple data sources seamlessly.
-   - Facilitates a unified view of air quality and its correlation with weather conditions.
-   - Employs CrewAI’s multi-agent framework to ensure robust and modular processing.
+**Repository:** [github.com/irvanzarkasie/cloudera-ai-air-quality](https://github.com/irvanzarkasie/cloudera-ai-air-quality)
 
-3. **Use Case Focus**:
-   - Designed for environmental monitoring and analysis.
-   - Aligns with global sustainability goals by providing actionable insights on air quality trends.
-
-## Functional Components
-### 1. Bounding Box Extraction
-The application determines bounding box coordinates for a given location using OpenStreetMap. This enables fetching weather data for all points within a region.
-
-### 2. Air Quality Analysis
-Retrieves PM10 and PM2.5 levels, compares them with AQI standards, and identifies trends.
-
-### 3. Weather Integration
-Integrates historical weather data with air quality trends to offer context on meteorological influences.
-
-### 4. Reporting
-Generates detailed report combining air quality and weather data for user-defined locations and timeframes.
-
-**To Generate a AirAware Report**
-1. From a Cloudera AI Session Launch Terminal
-2. Run the following command to generate a report for default Cities and dates i.e. Chennai, India and New Delhi, India <br>
-`python3 main.py`
-3. To run for a specific set of cities for a specific set of cities, dates, parameters air quality parameters e.g. pm25, pm10 etc <br>
-`python3 main.py --locations 'New York, USA', 'London, UK' --start_date '2025-01-01' --end_date '2025-01-03' --parameters 'pm25' `
-4. To know how to pass parameters<br>
-`python3 main.py --help`
-
- 
-## Example AirAware Report
---- Air Quality Analysis Report ---
-### Comprehensive Air Quality and Weather Report
-
-#### Introduction
-This report provides a detailed analysis of air quality data, specifically focusing on PM2.5 levels, alongside corresponding historical weather conditions for New Delhi and Chennai, India during the period of March 23 to March 26, 2025. The aim is to identify trends in air quality, compute average values, and explore potential correlations with meteorological conditions.
+**Python:** **3.11** everywhere (Cloudera AI Workbench session runtime and local virtualenv). The repo pins this via `.python-version`; see **`LOCAL_SETUP.md`** for macOS install steps.
 
 ---
 
-### 1. Air Quality Analysis
+## Workshop flow (four parts)
 
-#### 1.1 New Delhi, India
-
-**PM2.5 Data:**
-- **March 23:** 78.50 µg/m³
-- **March 24:** 92.60 µg/m³
-- **March 25:** 106.83 µg/m³
-- **March 26:** 99.07 µg/m³
-
-**Average PM2.5 Level:**  
-\[
-\text{Average} = \frac{78.50 + 92.60 + 106.83 + 99.07}{4} = 94.00 \, \text{µg/m³}
-\]
-
-**Weather Data:**
-- **March 23:** Mean Temp: 29.6°C, Wind Speed: 11.3 km/h, Humidity: 71%, Precipitation: 0.2 mm
-- **March 24:** Mean Temp: 29.0°C, Wind Speed: 9.0 km/h, Humidity: 75%, Precipitation: 0.6 mm
-- **March 25:** Mean Temp: 28.8°C, Wind Speed: 8.2 km/h, Humidity: 73%, Precipitation: 0.0 mm
-- **March 26:** Mean Temp: 29.0°C, Wind Speed: 9.8 km/h, Humidity: 71%, Precipitation: 0.0 mm
-
-**Observations:**
-- The PM2.5 levels in New Delhi exhibited a significant increase over the analyzed period, peaking at 106.83 µg/m³ on March 25.
-- There is a noticeable correlation between decreasing wind speed and increasing PM2.5 concentrations, suggesting that stagnant air may contribute to pollutant accumulation.
-- The highest PM2.5 concentration aligns with the lowest wind speeds and moderate humidity levels.
+| Step | What you do | Primary artifacts |
+|------|-------------|-------------------|
+| **1** | Create a Cloudera AI Workbench project from Git | Project + Python 3.11 session |
+| **2** | Fetch and explore air quality in the notebook | `Jakarta-Air-Snapshot-Lab.ipynb` |
+| **3** | Hand-build the multi-agent crew in code | `main_v1.py`, `agent_tools/` |
+| **4** | Build a similar agent in Agent Studio | `agent_tools_cai_studio/` |
 
 ---
 
-#### 1.2 Chennai, India
+## Step 1 — Create a Cloudera AI Workbench project from Git
 
-**PM2.5 Data:**
-- **March 23:** 18.84 µg/m³
-- **March 24:** 25.24 µg/m³
-- **March 25:** 31.04 µg/m³
-- **March 26:** 30.38 µg/m³
+1. In **Cloudera AI Workbench**, go to **Projects** and create a **New Project** (choose a name and visibility per your site policy).
+2. Under **Initial Setup**, select **Git** (not Blank, Template, or Local Files).
+3. Set the Git source:
+   - **Protocol:** **HTTPS** (unless your facilitator specifies SSH and you have keys configured).
+   - **Repository URL:**  
+     `https://github.com/irvanzarkasie/cloudera-ai-air-quality.git`
+   - **Branch name (optional):** leave empty for the repo default, or enter **`main`** or **`Lab`** as directed by your facilitator.
+4. Turn on **Advanced Options**, then under **Runtimes** add a session runtime for this lab:
+   - **Editor:** **JupyterLab**
+   - **Kernel:** **Python 3.11**
+   - **Edition:** **Standard**
+   - **Version:** **2026.08**
+   - Click **Add Runtime** so it appears in the project runtime list (default images are often Python 3.10 only).
+5. Click **Create Project**. Workbench clones the repository into the project; lab files (`main_v1.py`, `Jakarta-Air-Snapshot-Lab.ipynb`, `agent_tools/`, etc.) appear at the **project root**.
+6. Start a **Session** and choose the **JupyterLab / Python 3.11 / Standard / 2026.08** runtime you added.
+7. In a session terminal, install dependencies from the project root:
 
-**Average PM2.5 Level:**  
-\[
-\text{Average} = \frac{18.84 + 25.24 + 31.04 + 30.38}{4} = 26.15 \, \text{µg/m³}
-\]
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
 
-**Weather Data:**
-- **March 23:** Mean Temp: 29.4°C, Wind Speed: 7.3 km/h, Humidity: 78%, Precipitation: 0.1 mm
-- **March 24:** Mean Temp: 29.9°C, Wind Speed: 6.8 km/h, Humidity: 76%, Precipitation: 0.0 mm
-- **March 25:** Mean Temp: 30.1°C, Wind Speed: 6.5 km/h, Humidity: 75%, Precipitation: 0.0 mm
-- **March 26:** Mean Temp: 30.3°C, Wind Speed: 6.9 km/h, Humidity: 74%, Precipitation: 0.0 mm
+   - **Notebook-only (fast):** `pip install -r requirements-minimal.txt` — enough for Udara fetch, tables, and the Folium map.
+   - **Full lab (CrewAI):** `requirements.txt` pulls minimal + CrewAI add-on (`requirements-crewai-addon.txt`).
 
-**Observations:**
-- PM2.5 levels in Chennai showed a gradual increase from March 23 to March 25, with a slight decrease on March 26.
-- Despite lower PM2.5 levels compared to New Delhi, the trend indicates increasing pollution levels which may be influenced by lower wind speeds.
-- The humidity remained relatively high but did not significantly alter the PM2.5 concentrations, suggesting that other local sources of pollution could be at play.
+8. Configure **OpenAI** for agent steps (not required for notebook data fetch or `main_v1.py --dry-run`):
+
+   - Set **`OPENAI_API_KEY`** in the project environment / session variables, **or**
+   - Copy `.env.example` to `.env` in the project and set the key (do not commit `.env`).
+
+**Local prep (optional):** same lab on your laptop with **Python 3.11** — see **`LOCAL_SETUP.md`** and `requirements-local.txt`.
 
 ---
 
-### Conclusion
+## Step 2 — Notebook: fetch, analyze, and map
 
-The analysis highlights distinct differences in air quality trends between New Delhi and Chennai during the specified dates:
+Open **`Jakarta-Air-Snapshot-Lab.ipynb`** in a Workbench session.
 
-- **New Delhi** experienced significantly higher PM2.5 levels with an alarming peak due to stagnant meteorological conditions (lower wind speeds).
-- **Chennai**, while having lower PM2.5 concentrations overall, also showed an upward trend in pollution levels which warrants further monitoring.
+You will:
 
-Overall, this report underscores the critical need for continued air quality monitoring in conjunction with meteorological data to inform public health strategies and policy-making.
+1. Run **setup** (`agent_tools/workshop_install.py` ensures pandas, requests, folium, etc.).
+2. **Fetch** the live SPKU snapshot via `agent_tools/jakarta_air_sources.py` and station tables via `agent_tools/jakarta_viz.py`.
+3. Display an **interactive ISPU map** (station markers colored by Indonesian ISPU bands).
+
+The notebook is intentionally **data and visualization only**. It does **not** run the full CrewAI crew (long agent output is easier to manage in the terminal).
+
+**Tip:** If Folium is missing on the base image, re-run the setup cell; CAI often ships pandas but not folium.
+
+---
+
+## Step 3 — Hand-build the agent in `main_v1.py`
+
+In a **session terminal** (same project, repo root on `PYTHONPATH`), you **hand-build** the **Jakarta live snapshot crew** in **`main_v1.py`** (your facilitator may start from a skeleton file; this repo also ships the completed crew for reference):
+
+- **Tools** (under `agent_tools/`):
+  - `InputParserTool` — locations and parameters from natural language
+  - `AirQualityAnalysisTool` — live readings from udara.jakarta.go.id
+  - `CurrentWeatherTool` — current weather for context
+- **Agents** — e.g. input parser, weather specialist, air quality retriever, analyst (LLM)
+- **Tasks** — parse → weather → air quality → markdown report
+- **Crew** — `Crew(agents=..., tasks=...)` and `kickoff()`
+
+Verify **without** an API key (tools only):
+
+```bash
+python main_v1.py --dry-run
+```
+
+Run the full crew (requires `OPENAI_API_KEY`):
+
+```bash
+python main_v1.py --user-input "Report current Jakarta air quality; focus on pm25 and ispu."
+```
+
+On CAI/CDSW, prefer **`--quiet`** and write the full report to a file (web terminals may truncate stdout):
+
+```bash
+python main_v1.py --quiet -o report.md \
+  --user-input "Snapshot for Jakarta: worst and best ISPU today."
+cat report.md
+```
+
+**Reference:** `main_v1_full_soln.py` is a thin runner that delegates to the crew in `main_v1.py`. **`main_v2.py`** offers an alternate layout for comparison.
+
+---
+
+## Step 4 — Agent Studio: same story, visual workflow
+
+Use **`agent_tools_cai_studio/`** to register the same tool surface in **Cloudera AI Agent Studio**:
+
+| Studio-oriented module | Role |
+|------------------------|------|
+| `input_parser_tool.py` | Parse user intent (locations, parameters) |
+| `air_quality_analysis_tool.py` | Live Jakarta SPKU snapshot |
+| `weather_tool.py` | Current weather |
+| `agent_tools/jakarta_air_sources.py` | Shared Udara fetch helpers |
+
+Build an agent workflow that mirrors **`main_v1.py`**: parse input → fetch weather → fetch air quality → analyst produces a concise markdown snapshot (worst/best ISPU stations, observation time, weather note, conclusion). Wire tools to agents and tasks the same way you did in code, using Studio’s UI instead of Python `Agent` / `Task` definitions.
+
+Your facilitator may provide Studio-specific screenshots or naming; the behavioral target is **parity with the Step 3 crew**.
+
+---
+
+## Data sources and behavior
+
+| Source | Use in this lab |
+|--------|------------------|
+| [udara.jakarta.go.id](https://udara.jakarta.go.id) | Official live SPKU/LCS snapshot (`window.__SPKU_DATA__`) — ISPU, PM2.5, PM10, station names, **kecamatan** |
+| [Open-Meteo](https://open-meteo.com/) | Current weather for Jakarta |
+
+Air quality tool output is a **string summary** for the LLM (including ISPU extremes), not a raw dataframe inside the agent loop.
+
+---
+
+## Repository layout
+
+```
+├── Jakarta-Air-Snapshot-Lab.ipynb   # Step 2 — fetch, table, map
+├── main_v1.py                       # Step 3 — CrewAI crew (hand-build focus)
+├── main_v2.py                       # Alternate crew layout
+├── main_v1_full_soln.py             # Reference runner
+├── agent_tools/                     # Python tools for fetch, viz, and CrewAI
+│   ├── jakarta_air_sources.py
+│   ├── jakarta_viz.py
+│   ├── air_quality_analysis_tool.py
+│   ├── weather_tools.py
+│   ├── input_parser_tool.py
+│   └── workshop_install.py
+├── agent_tools_cai_studio/          # Step 4 — Agent Studio tool copies
+├── requirements*.txt                # Staged installs (minimal / CrewAI)
+└── LOCAL_SETUP.md                   # macOS local dev notes
+```
+
+---
+
+## Troubleshooting
+
+| Issue | What to try |
+|-------|-------------|
+| `401` from OpenAI | Set a valid `OPENAI_API_KEY`; do not use placeholder values in `.env` |
+| `No module named folium` | Re-run notebook setup or `pip install -r requirements-minimal.txt` |
+| Truncated report in browser terminal | `python main_v1.py --quiet -o report.md` |
+| CrewAI install slow | Install `requirements-minimal.txt` first for the notebook; add CrewAI when starting Step 3 |
+
+---
+
+## Acknowledgments
+
+Based on the **AirAware** lab ([SuperEllipse/AirAware](https://github.com/SuperEllipse/AirAware)), adapted for **Jakarta live air quality** and **Cloudera AI** workshop delivery.
