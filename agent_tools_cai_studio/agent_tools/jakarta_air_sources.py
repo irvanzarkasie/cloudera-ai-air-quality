@@ -98,6 +98,7 @@ def spku_to_dataframe(
                     "lat": st.get("lat"),
                     "lng": st.get("lng"),
                     "status": st.get("status"),
+                    "kecamatan": st.get("kecamatan"),
                 }
             )
 
@@ -117,6 +118,7 @@ def spku_to_dataframe(
                     "lat": st.get("lat"),
                     "lng": st.get("lng"),
                     "status": st.get("status"),
+                    "kecamatan": st.get("kecamatan"),
                 }
             )
 
@@ -161,6 +163,7 @@ def open_meteo_current_to_rows(payload: dict[str, Any], location_label: str) -> 
                 "lat": JAKARTA_LAT,
                 "lng": JAKARTA_LON,
                 "status": None,
+                "kecamatan": None,
             }
         )
     return rows
@@ -188,7 +191,7 @@ def fetch_jakarta_realtime_dataframe(
 
     if df.empty:
         return pd.DataFrame(
-            columns=["date", "parameter", "value", "units", "location"]
+            columns=["date", "parameter", "value", "units", "location", "kecamatan", "status"]
         )
     return df
 

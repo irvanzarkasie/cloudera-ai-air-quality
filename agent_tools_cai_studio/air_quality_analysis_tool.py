@@ -44,6 +44,9 @@ def run_tool(config: UserParameters, args: ToolParameters) -> Any:
     core = ["date", "parameter", "value", "units", "location", "kecamatan", "status"]
     if live_df.empty:
         return pd.DataFrame(columns=core)
+    pd.set_option('display.max_colwidth', None)
+    pd.set_option('display.max_columns', None)
+    pd.set_option("display.max_rows", 200)
     return live_df[[c for c in core if c in live_df.columns]]
 
 
