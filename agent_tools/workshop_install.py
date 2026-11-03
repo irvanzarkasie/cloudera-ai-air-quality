@@ -33,7 +33,7 @@ def _install_req(root: Path, req_file: str, *, allow_pypi: bool = True) -> None:
         print(f"Using offline wheelhouse: {wh}")
         _pip("--no-index", f"--find-links={wh}", "-r", str(path))
     elif allow_pypi:
-        _pip("-q", "-r", str(path))
+        _pip("-r", str(path))
     else:
         raise RuntimeError(f"Missing wheels for {req_file}; set AIRAWARE_WHEELHOUSE or allow PyPI.")
 

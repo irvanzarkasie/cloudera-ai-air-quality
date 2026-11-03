@@ -38,15 +38,26 @@ The lab uses a **live snapshot** model: current station ISPU and pollutants from
    - Click **Add Runtime** so it appears in the project runtime list (default images are often Python 3.10 only).
 5. Click **Create Project**. Workbench clones the repository into the project; lab files (`main_v1.py`, `Jakarta-Air-Snapshot-Lab.ipynb`, `agent_tools/`, etc.) appear at the **project root**.
 6. Start a **Session** and choose the **JupyterLab / Python 3.11 / Standard / 2026.08** runtime you added.
-7. In a session terminal, install dependencies from the project root:
+7. Install dependencies from the project root in **two steps** (same terminal, or use a second terminal tab for step 7b):
 
    ```bash
    pip install --upgrade pip
+   pip install -r requirements-minimal.txt
+   ```
+
+   **Step 7a — minimal (do this first):** Udara fetch, tables, and the Folium map in the notebook. This install is relatively **fast** (usually about a minute).
+
+   When 7a finishes, open **`Jakarta-Air-Snapshot-Lab.ipynb`** and start **Step 2** of the workshop. You do not need CrewAI for the notebook.
+
+   **Step 7b — full lab (start next; can run while you work in the notebook):**
+
+   ```bash
    pip install -r requirements.txt
    ```
 
-   - **Notebook-only (fast):** `pip install -r requirements-minimal.txt` — enough for Udara fetch, tables, and the Folium map.
-   - **Full lab (CrewAI):** `requirements.txt` pulls minimal + CrewAI add-on (`requirements-crewai-addon.txt`).
+   This adds the **CrewAI** stack (`requirements-crewai-addon.txt` plus the minimal pins). **Downloads** are often quick; **installing** many packages (chromadb, litellm, etc.) can take **10–25+ minutes** on shared project storage — that is normal. Leave this command running in the terminal (or a second tab) while you use the notebook.
+
+   You need **7b complete** before **Step 3** (`main_v1.py` with the full crew). **`main_v1.py --dry-run`** works after 7a only.
 
 8. Configure **OpenAI** for agent steps (not required for notebook data fetch or `main_v1.py --dry-run`):
 
@@ -165,7 +176,7 @@ Air quality tool output is a **string summary** for the LLM (including ISPU extr
 | `401` from OpenAI | Set a valid `OPENAI_API_KEY`; do not use placeholder values in `.env` |
 | `No module named folium` | Re-run notebook setup or `pip install -r requirements-minimal.txt` |
 | Truncated report in browser terminal | `python main_v1.py --quiet -o report.md` |
-| CrewAI install slow | Install `requirements-minimal.txt` first for the notebook; add CrewAI when starting Step 3 |
+| Full `pip install -r requirements.txt` slow | Expected on CAI (install phase, not download). Run **7a** first, use the notebook while **7b** runs in another terminal tab |
 
 ---
 
